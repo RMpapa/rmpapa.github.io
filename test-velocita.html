@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test di velocità – Annotatore live RM</title>
+<!-- Attiva l'isolamento cross-origin (serve per usare più thread) su GitHub Pages -->
+<script src="coi-serviceworker.min.js"></script>
+<script src="ort/ort.wasm.min.js"></script>
+<style>
+  :root {
+    --vetro: #E6ECEF; --carta: #F7F9FA; --inchiostro: #14212B; --grigio: #56656F;
+    --linea: #C3CED5; --accento: #1D5C7A; --ok: #2E7549; --medio: #9A5F08; --no: #B3261E;
+    --num: "Bahnschrift", "DIN Alternate", "Segoe UI", system-ui, sans-serif;
+    --testo: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--vetro); color: var(--inchiostro); font: 16px/1.5 var(--testo); }
+  main { max-width: 780px; margin: 0 auto; padding: 40px 20px 64px; }
+  h1 { font: 600 2.4rem/1.1 var(--num); letter-spacing: -0.01em; margin: 0 0 12px; }
+  h2 { font: 600 1.25rem/1.2 var(--num); margin: 40px 0 12px; }
+  p { margin: 0 0 12px; max-width: 64ch; }
+  .nota { color: var(--grigio); font-size: .92rem; }
+  .pannello { background: var(--carta); border: 1px solid var(--linea); border-radius: 6px; padding: 16px 20px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0; }
+  dt { color: var(--grigio); }
+  dd { margin: 0; font-family: var(--num); }
+  .ok { color: var(--ok); } .medio { color: var(--medio); } .no { color: var(--no); }
+  fieldset { border: 0; padding: 0; margin: 0 0 16px; }
+  legend { color: var(--grigio); margin-bottom: 6px; }
+  label { display: block; padding: 4px 0; }
+  button { font: 600 1rem var(--testo); padding: 10px 18px; border-radius: 4px; cursor: pointer;
+           border: 1px solid var(--accento); background: var(--accento); color: #fff; margin-right: 8px; }
+  button.secondario { background: transparent; color: var(--accento); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 3px solid #E0A526; outline-offset: 2px; }
+  #stato { font-family: var(--num); margin-top: 14px; min-height: 1.5em; }
+  .scorri { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-family: var(--num); font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 400; color: var(--grigio); border-bottom: 1px solid var(--linea); padding: 6px 10px 6px 0; }
+  td { border-bottom: 1px solid var(--linea); padding: 8px 10px 8px 0; white-space: nowrap; }
+  td.media { font-size: 1.9rem; font-weight: 600; }
+  #riepilogo { font: 600 1.15rem/1.4 var(--num); margin: 16px 0; }
+  textarea { position: absolute; left: -9999px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Quanto è veloce questo PC?</h1>
+  <p>Misura quanto tempo serve per analizzare una slice RM 256×256, usando due modelli di prova con pesi casuali.
+     Nessuna immagine viene caricata o inviata: l'input è generato nella pagina.</p>
+
+  <h2>Questo computer</h2>
+  <div class="pannello"><dl id="ambiente"></dl></div>
+
+  <h2>Test</h2>
+  <div class="pannello">
+    <fieldset>
+      <legend>Modelli da provare</legend>
+      <label><input type="checkbox" name="modello" value="leggero" checked> Leggero – 5 milioni di parametri, 5 MB</label>
+      <label><input type="checkbox" name="modello" value="standard" checked> Standard nnU-Net 2D – 33 milioni di parametri, 34 MB</label>
+    </fieldset>
+    <button id="avvia">Avvia il test</button>
+    <button id="interrompi" class="secondario" hidden>Interrompi</button>
+    <div id="stato" role="status" aria-live="polite"></div>
+    <p class="nota">La pagina si ricarica da sola tra una prova e l'altra: serve per cambiare il numero di thread. Durata: 1–5 minuti.</p>
+  </div>
+
+  <section id="sezioneRisultati" hidden>
+    <h2>Risultati</h2>
+    <div id="riepilogo"></div>
+    <div class="scorri"><table>
+      <thead><tr><th>Modello</th><th>Thread</th><th>Media per slice</th><th>Min–max</th><th>Download</th><th>Caricamento</th></tr></thead>
+      <tbody id="righe"></tbody>
+    </table></div>
+    <p class="nota">Sotto 1 s: ottimo. 1–2 s: accettabile. Oltre 2 s: troppo lento, serve un modello più piccolo.</p>
+    <button id="copia">Copia i risultati</button>
+    <button id="ricomincia" class="secondario">Cancella i risultati</button>
+    <span id="copiato" class="nota" role="status"></span>
+  </section>
+  <textarea id="appunti" aria-hidden="true" tabindex="-1"></textarea>
+</main>
+
+<script>
+const MODELLI = {
+  leggero:  { nome: 'Leggero',  parti: ['modelli/leggero_int8.onnx'] },
+  standard: { nome: 'Standard', parti: ['modelli/standard_int8.part0', 'modelli/standard_int8.part1'] },
+};
+const RIPETIZIONI = 8, LATO = 256, CHIAVE = 'testVelocitaRM';
+const $ = id => document.getElementById(id);
+const leggi = () => JSON.parse(sessionStorage.getItem(CHIAVE) || 'null');
+const salva = s => sessionStorage.setItem(CHIAVE, JSON.stringify(s));
+const ms = x => x >= 1000 ? (x / 1000).toFixed(2) + ' s' : Math.round(x) + ' ms';
+const giudizio = x => x <= 1000 ? ['ok', 'ottimo'] : x <= 2000 ? ['medio', 'accettabile'] : ['no', 'lento'];
+
+// ---------- Ambiente ----------
+function simdSupportato() {
+  try { return WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11])); }
+  catch { return false; }
+}
+function ambiente() {
+  const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1];
+  return {
+    browser: chrome ? 'Chrome ' + chrome : navigator.userAgent,
+    cpu: navigator.hardwareConcurrency || '?',
+    memoria: navigator.deviceMemory ? '≥ ' + navigator.deviceMemory + ' GB' : 'non rilevata',
+    isolato: self.crossOriginIsolated === true,
+    simd: simdSupportato(),
+    cattura: !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia),
+    pip: 'documentPictureInPicture' in window,
+  };
+}
+function mostraAmbiente(a) {
+  const si = (v, testoSi, testoNo, grave = true) =>
+    `<span class="${v ? 'ok' : grave ? 'no' : 'medio'}">${v ? '✓ ' + testoSi : '✗ ' + testoNo}</span>`;
+  $('ambiente').innerHTML = `
+    <dt>Browser</dt><dd>${a.browser}</dd>
+    <dt>Processori logici</dt><dd>${a.cpu}</dd>
+    <dt>Memoria</dt><dd>${a.memoria}</dd>
+    <dt>Calcolo WebAssembly</dt><dd>${si(a.simd, 'SIMD disponibile', 'SIMD assente: il modello non può girare')}</dd>
+    <dt>Più thread</dt><dd>${si(a.isolato, 'disponibili', 'non disponibili, si userà 1 thread', false)}</dd>
+    <dt>Cattura schermo</dt><dd>${si(a.cattura, 'disponibile', 'non disponibile')}</dd>
+    <dt>Finestra fluttuante</dt><dd>${si(a.pip, 'disponibile', 'non disponibile, serve lo schermo diviso', false)}</dd>`;
+}
+
+// ---------- Singola prova ----------
+function immagineSintetica() {           // ellisse con rumore, già normalizzata (z-score)
+  const d = new Float32Array(LATO * LATO);
+  for (let y = 0; y < LATO; y++) for (let x = 0; x < LATO; x++) {
+    const r = ((x - 128) / 90) ** 2 + ((y - 128) / 110) ** 2;
+    d[y * LATO + x] = (r < 1 ? 1 - r : -0.8) + (Math.random() - 0.5) * 0.3;
+  }
+  let m = 0, s = 0; for (const v of d) m += v; m /= d.length;
+  for (const v of d) s += (v - m) ** 2; s = Math.sqrt(s / d.length);
+  for (let i = 0; i < d.length; i++) d[i] = (d[i] - m) / s;
+  return d;
+}
+function argmax(dati, classi) {          // stesso lavoro che farà l'app vera
+  const n = LATO * LATO, out = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    let best = dati[p], k = 0;
+    for (let c = 1; c < classi; c++) { const v = dati[c * n + p]; if (v > best) { best = v; k = c; } }
+    out[p] = k;
+  }
+  return out;
+}
+async function eseguiProva({ modello, thread }, stato) {
+  const m = MODELLI[modello];
+  ort.env.wasm.wasmPaths = new URL('ort/', location.href).href;
+  ort.env.wasm.numThreads = thread;
+  const avviso = t => { $('stato').textContent = `${m.nome}, ${thread} thread: ${t}  (prova ${stato.indice + 1} di ${stato.piano.length})`; };
+
+  avviso('download del modello…');
+  let t = performance.now();
+  const pezzi = await Promise.all(m.parti.map(async p => {
+    const r = await fetch(p);
+    if (!r.ok) throw new Error(`file ${p} non trovato (HTTP ${r.status})`);
+    return new Uint8Array(await r.arrayBuffer());
+  }));
+  const byte = new Uint8Array(pezzi.reduce((a, p) => a + p.length, 0));
+  let off = 0; for (const p of pezzi) { byte.set(p, off); off += p.length; }
+  const download = performance.now() - t;
+
+  avviso('caricamento…');
+  t = performance.now();
+  const sessione = await ort.InferenceSession.create(byte, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+  const input = new ort.Tensor('float32', immagineSintetica(), [1, 1, LATO, LATO]);
+  await sessione.run({ [sessione.inputNames[0]]: input });          // primo giro, escluso dalla media
+  const caricamento = performance.now() - t;
+
+  const tempi = [];
+  for (let i = 0; i < RIPETIZIONI; i++) {
+    avviso(`analisi ${i + 1} di ${RIPETIZIONI}…`);
+    t = performance.now();
+    const out = await sessione.run({ [sessione.inputNames[0]]: input });
+    const logits = out[sessione.outputNames[0]];
+    argmax(logits.data, logits.dims[1]);
+    tempi.push(performance.now() - t);
+  }
+  return { modello, thread, download, caricamento,
+           media: tempi.reduce((a, b) => a + b) / tempi.length, min: Math.min(...tempi), max: Math.max(...tempi) };
+}
+
+// ---------- Flusso con ricarica tra le prove ----------
+function avvia() {
+  const scelti = [...document.querySelectorAll('input[name=modello]:checked')].map(i => i.value);
+  if (!scelti.length) { $('stato').textContent = 'Scegli almeno un modello.'; return; }
+  const a = ambiente();
+  const thread = a.isolato ? [1, 2, 4].filter(n => n <= a.cpu) : [1];
+  const piano = scelti.flatMap(modello => thread.map(t => ({ modello, thread: t })));
+  salva({ piano, indice: 0, risultati: [], ambiente: a });
+  location.replace(location.pathname + '?prova');
+}
+async function continua() {
+  const s = leggi();
+  if (!s || s.indice >= s.piano.length) { history.replaceState(null, '', location.pathname); return mostraRisultati(); }
+  $('avvia').disabled = true; $('interrompi').hidden = false;
+  mostraRisultati();
+  try { s.risultati.push(await eseguiProva(s.piano[s.indice], s)); }
+  catch (e) { s.risultati.push({ ...s.piano[s.indice], errore: e.message || String(e) }); }
+  s.indice++; salva(s);
+  setTimeout(() => location.replace(location.pathname + (s.indice < s.piano.length ? '?prova' : '')), 300);
+}
+function mostraRisultati() {
+  const s = leggi();
+  if (!s || !s.risultati.length) return;
+  $('sezioneRisultati').hidden = false;
+  $('righe').innerHTML = s.risultati.map(r => r.errore
+    ? `<tr><td>${MODELLI[r.modello].nome}</td><td>${r.thread}</td><td colspan="4" class="no">Errore: ${r.errore}</td></tr>`
+    : `<tr><td>${MODELLI[r.modello].nome}</td><td>${r.thread}</td>
+         <td class="media ${giudizio(r.media)[0]}">${ms(r.media)}</td>
+         <td>${ms(r.min)}–${ms(r.max)}</td><td>${ms(r.download)}</td><td>${ms(r.caricamento)}</td></tr>`).join('');
+  const validi = s.risultati.filter(r => !r.errore);
+  if (validi.length && s.indice >= s.piano.length) {
+    const b = validi.reduce((a, r) => r.media < a.media ? r : a);
+    const [cls, g] = giudizio(b.media);
+    $('riepilogo').innerHTML = `Migliore: ${MODELLI[b.modello].nome} con ${b.thread} thread, <span class="${cls}">${ms(b.media)} per slice (${g})</span>.`;
+    $('stato').textContent = 'Test completato.';
+    $('avvia').disabled = false; $('interrompi').hidden = true;
+  }
+}
+function report() {
+  const s = leggi(), a = s.ambiente;
+  const righe = s.risultati.map(r => r.errore
+    ? `${MODELLI[r.modello].nome} | ${r.thread} thread | ERRORE: ${r.errore}`
+    : `${MODELLI[r.modello].nome} | ${r.thread} thread | media ${ms(r.media)} | min ${ms(r.min)} | max ${ms(r.max)} | download ${ms(r.download)} | caricamento ${ms(r.caricamento)}`);
+  return [`Test velocità Annotatore live RM`, `${a.browser} | CPU logiche ${a.cpu} | memoria ${a.memoria} | multi-thread ${a.isolato ? 'sì' : 'no'} | SIMD ${a.simd ? 'sì' : 'no'} | cattura ${a.cattura ? 'sì' : 'no'} | PiP ${a.pip ? 'sì' : 'no'}`, ...righe].join('\n');
+}
+async function copia() {
+  const testo = report();
+  try { await navigator.clipboard.writeText(testo); }
+  catch { const t = $('appunti'); t.value = testo; t.select(); document.execCommand('copy'); }
+  $('copiato').textContent = 'Copiato: incollalo nella chat.';
+}
+
+$('avvia').onclick = avvia;
+$('interrompi').onclick = () => { const s = leggi(); if (s) { s.piano = s.piano.slice(0, s.indice); salva(s); } location.replace(location.pathname); };
+$('ricomincia').onclick = () => { sessionStorage.removeItem(CHIAVE); location.replace(location.pathname); };
+$('copia').onclick = copia;
+mostraAmbiente(ambiente());
+if (typeof ort === 'undefined') $('stato').innerHTML = '<span class="no">Libreria di calcolo non caricata: controlla che la cartella ort sia stata caricata.</span>';
+else if (location.search.includes('prova')) continua(); else mostraRisultati();
+</script>
+</body>
+</html>
