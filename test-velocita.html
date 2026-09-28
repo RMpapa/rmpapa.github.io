@@ -150,6 +150,21 @@ async function eseguiProva({ modello, thread }, stato) {
   ort.env.wasm.numThreads = thread;
   const avviso = t => { $('stato').textContent = `${m.nome}, ${thread} thread: ${t}  (prova ${stato.indice + 1} di ${stato.piano.length})`; };
 
+  avviso('download del motore di calcolo…');
+  const url = 'ort/ort-wasm-simd-threaded.wasm';
+  let r = await fetch(url, { cache: 'no-store' });
+  let wasm = new Uint8Array(await r.arrayBuffer());
+  const diagnosi = x => `HTTP ${x.status}, ${wasm.length} byte, tipo "${x.headers.get('content-type')}", ` +
+    `service worker ${navigator.serviceWorker && navigator.serviceWorker.controller ? 'attivo' : 'non attivo'}`;
+  const valido = () => wasm.length > 1e6 && wasm[0] === 0 && wasm[1] === 0x61 && wasm[2] === 0x73 && wasm[3] === 0x6d;
+  if (!valido()) {                                  // secondo tentativo scavalcando il service worker
+    const primo = diagnosi(r);
+    r = await fetch(url + '?nosw=' + Date.now(), { cache: 'reload' });
+    wasm = new Uint8Array(await r.arrayBuffer());
+    if (!valido()) throw new Error(`motore wasm non valido. 1° tentativo: ${primo}. 2° tentativo: ${diagnosi(r)}`);
+  }
+  ort.env.wasm.wasmBinary = wasm;
+
   avviso('download del modello…');
   let t = performance.now();
   const pezzi = await Promise.all(m.parti.map(async p => {
