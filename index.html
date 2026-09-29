@@ -105,7 +105,8 @@ let CLASSI = ["sfondo", "sostanza bianca cerebrale", "ventricolo laterale", "cor
   "giro temporale superiore", "giro sopramarginale", "polo frontale", "polo temporale", "giro temporale trasverso (Heschl)", "insula"];
 
 // ---------------- Stato ----------------
-const $ = id => document.getElementById(id);
+// gli elementi della vista si spostano nella finestra fluttuante: vanno cercati anche lì
+const $ = id => document.getElementById(id) || (pipWin && pipWin.document.getElementById(id));
 const video = $('video'), tela = $('tela'), vista = $('vista');
 let sessione = null, stream = null, riquadro = null, pipWin = null;
 let inCorso = false, inPausa = false, selezionando = false, trascina = null;
