@@ -81,7 +81,7 @@
     <p><b>1.</b> Apri questa pagina con Ctrl+T nella stessa finestra del PACS, clicca <b>Avvia cattura</b> e scegli la scheda del PACS.
        <b>2.</b> Trascina un rettangolo sull'immagine RM, escludendo menu e scritte.
        <b>3.</b> Apri la <b>finestra fluttuante</b> e torna al PACS: le etichette si aggiornano quando cambi slice.</p>
-    <p>Passa il mouse su una zona colorata per leggerne il nome. Destra e sinistra non sono distinte.</p>
+    <p>Passa il mouse su una struttura o su un'etichetta per evidenziarle entrambe. Destra e sinistra non sono distinte dal modello: ogni lato dell'immagine ha le sue etichette.</p>
   </div>
 </main>
 
@@ -211,9 +211,9 @@ tela.addEventListener('pointerdown', ev => {
 tela.addEventListener('pointermove', ev => {
   const p = posizione(ev);
   if (selezionando) { if (trascina) { trascina.x1 = p.x; trascina.y1 = p.y; } return; }
-  mostraSottoCursore(p);
+  aggiornaHover(p);
 });
-tela.addEventListener('pointerleave', () => { $('cursore').style.display = 'none'; });
+tela.addEventListener('pointerleave', () => { $('cursore').style.display = 'none'; if (evidenziato) { evidenziato = null; disegna(); } });
 tela.addEventListener('pointerup', () => {
   if (!selezionando || !trascina) return;
   const a = areaVideo();
@@ -265,13 +265,13 @@ async function analizza() {
 
   const px = ctxLavoro.getImageData(0, 0, LATO, LATO).data, grigio = new Uint8Array(N);
   for (let i = 0; i < N; i++) grigio[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-  const input = prepara(grigio);
-  if (!input) { risultato = null; inCorso = false; stato('nessuna immagine nel riquadro'); disegna(); return; }
+  const prep = prepara(grigio);
+  if (!prep) { risultato = null; inCorso = false; stato('nessuna immagine nel riquadro'); disegna(); return; }
 
   const t = performance.now();
-  const out = await sessione.run({ input: new ort.Tensor('float32', input, [1, 1, LATO, LATO]) });
+  const out = await sessione.run({ input: new ort.Tensor('float32', prep.input, [1, 1, LATO, LATO]) });
   const ms = performance.now() - t;
-  risultato = { classe: out.classe.data, conf: out.confidenza.data, geo };
+  risultato = { classe: out.classe.data, conf: out.confidenza.data, geo, centro: prep.centro };
   inCorso = false;
   stato(`<span class="ok">●</span> ${Math.round(ms)} ms`);
   disegna();
@@ -292,19 +292,22 @@ function prepara(g) {
   for (let i = 0; i < N; i++) if (!sfondo[i]) { s += g[i]; s2 += g[i] * g[i]; n++; }
   if (n < 500) return null;
   const media = s / n, dev = Math.max(Math.sqrt(Math.max(s2 / n - media * media, 0)), 1e-8);
-  const out = new Float32Array(N);
-  for (let i = 0; i < N; i++) out[i] = sfondo[i] ? 0 : (g[i] - media) / dev;
-  return out;
+  const out = new Float32Array(N); let sx = 0;
+  for (let i = 0; i < N; i++) { out[i] = sfondo[i] ? 0 : (g[i] - media) / dev; if (!sfondo[i]) sx += i % LATO; }
+  return { input: out, centro: sx / n };
 }
 
-// ---------------- Blocchi ed etichette ----------------
-function mappaFiltrata() {
-  const soglia = +$('soglia').value / 100, L = new Uint8Array(N);
+// ---------------- Blocchi, gruppi ed etichette esterne ----------------
+let analisi = null;          // cache: mappa filtrata, componenti, gruppi (ricalcolata solo se cambia risultato o soglia)
+let impaginato = null;       // posizioni sullo schermo di immagine ed etichette (per l'hover)
+let evidenziato = null;      // chiave del gruppo sotto il mouse
+
+function calcolaAnalisi() {
+  const soglia = +$('soglia').value / 100;
+  if (analisi && analisi.risultato === risultato && analisi.soglia === soglia) return analisi;
+  const L = new Uint8Array(N);
   for (let i = 0; i < N; i++) L[i] = risultato.conf[i] >= soglia ? risultato.classe[i] : 0;
-  return L;
-}
-function blocchi(L) {
-  // distanza dal bordo del proprio blocco (per mettere la scritta nel punto più interno)
+  // distanza dal bordo del proprio blocco (per ancorare la linea nel punto più interno)
   const d = new Float32Array(N), INF = 1e9;
   for (let i = 0; i < N; i++) {
     if (!L[i]) continue;
@@ -326,22 +329,31 @@ function blocchi(L) {
     if (L[i + LATO + 1] === L[i]) d[i] = Math.min(d[i], d[i + LATO + 1] + 1.41);
     if (L[i + LATO - 1] === L[i]) d[i] = Math.min(d[i], d[i + LATO - 1] + 1.41);
   }
-  // componenti connesse (4-connessione) per classe
-  const visto = new Uint8Array(N), coda = new Int32Array(N), lista = [];
+  // componenti connesse (4-connessione) → gruppi "struttura + lato dell'immagine"
+  const comp = new Int32Array(N).fill(-1), coda = new Int32Array(N), gruppi = new Map(), compGruppo = [];
+  let nComp = 0;
   for (let i0 = 0; i0 < N; i0++) {
-    if (!L[i0] || visto[i0]) continue;
-    const c = L[i0]; let h = 0, t = 0, area = 0, migliore = i0;
-    visto[i0] = 1; coda[t++] = i0;
+    if (!L[i0] || comp[i0] >= 0) continue;
+    const c = L[i0], id = nComp++; let h = 0, t = 0, area = 0, migliore = i0;
+    comp[i0] = id; coda[t++] = i0;
     while (h < t) {
       const i = coda[h++]; area++;
       if (d[i] > d[migliore]) migliore = i;
       const x = i % LATO;
       for (const j of [x > 0 ? i - 1 : -1, x < LATO - 1 ? i + 1 : -1, i - LATO, i + LATO])
-        if (j >= 0 && j < N && !visto[j] && L[j] === c) { visto[j] = 1; coda[t++] = j; }
+        if (j >= 0 && j < N && comp[j] < 0 && L[j] === c) { comp[j] = id; coda[t++] = j; }
     }
-    if (area >= AREA_MIN_ETICHETTA) lista.push({ c, area, x: migliore % LATO, y: (migliore / LATO) | 0 });
+    const ax = migliore % LATO, ay = (migliore / LATO) | 0, lato = ax < risultato.centro ? 'sx' : 'dx';
+    const chiave = c + '-' + lato;
+    let g = gruppi.get(chiave);
+    if (!g) { g = { chiave, c, lato, area: 0, maxArea: 0, ax, ay }; gruppi.set(chiave, g); }
+    g.area += area;
+    if (area > g.maxArea) { g.maxArea = area; g.ax = ax; g.ay = ay; }
+    compGruppo[id] = chiave;
   }
-  return lista.sort((a, b) => b.area - a.area);
+  analisi = { risultato, soglia, L, comp, compGruppo,
+              gruppi: [...gruppi.values()].filter(g => g.maxArea >= AREA_MIN_ETICHETTA) };
+  return analisi;
 }
 
 // ---------------- Disegno ----------------
@@ -355,50 +367,116 @@ function preparaTela() {
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
   return ctx;
 }
-function areaImmagine() {                  // dove appare il riquadro dentro la tela
-  const W = tela.clientWidth, H = tela.clientHeight, s = Math.min(W / fotogramma.width, H / fotogramma.height);
-  return { x: (W - fotogramma.width * s) / 2, y: (H - fotogramma.height * s) / 2, w: fotogramma.width * s, h: fotogramma.height * s };
+function areaImmagine(margine = 0) {       // dove appare il riquadro dentro la tela, lasciando i margini per le etichette
+  const W = tela.clientWidth - 2 * margine, H = tela.clientHeight;
+  const s = Math.min(W / fotogramma.width, H / fotogramma.height);
+  return { x: margine + (W - fotogramma.width * s) / 2, y: (H - fotogramma.height * s) / 2,
+           w: fotogramma.width * s, h: fotogramma.height * s };
 }
+const rgba = (c, a) => `rgba(${colori[c][0]},${colori[c][1]},${colori[c][2]},${a})`;
+
 function disegna() {
   if (selezionando) return;
-  const ctx = preparaTela(); if (!ctx) return;
+  const ctx = preparaTela(); impaginato = null; if (!ctx) return;
   if (!risultato || !fotogramma.width) return;
-  const a = areaImmagine(), g = risultato.geo;
+  const conEtichette = $('mostraEtichette').checked, W = tela.clientWidth, H = tela.clientHeight;
+  const dim = 12, riga = dim + 5;
+  const A = calcolaAnalisi(), g = risultato.geo;
+  ctx.font = `600 ${dim}px "Segoe UI", system-ui, sans-serif`;
+  // margini laterali larghi quanto serve all'etichetta più lunga (max 30 % della larghezza)
+  const piuLunga = Math.max(0, ...A.gruppi.map(gr => ctx.measureText(CLASSI[gr.c]).width));
+  const margine = conEtichette ? Math.round(Math.min(W * 0.3, Math.max(90, piuLunga + 26))) : 0;
+  const spazioTesto = margine - 26;
+  const tronca = t => { if (ctx.measureText(t).width <= spazioTesto) return t;
+    while (t.length > 3 && ctx.measureText(t + '…').width > spazioTesto) t = t.slice(0, -1); return t + '…'; };
+  const a = areaImmagine(margine);
+  const inSchermo = (u, v) => ({ x: a.x + (u + .5 - g.dx) / g.dw * a.w, y: a.y + (v + .5 - g.dy) / g.dh * a.h });
+
+  // immagine
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(fotogramma, a.x, a.y, a.w, a.h);
-  const L = mappaFiltrata();
-  if ($('mostraMaschere').checked) {
-    const img = new ImageData(LATO, LATO), alfa = Math.round(+$('opacita').value / 100 * 255);
-    for (let i = 0; i < N; i++) if (L[i]) {
-      const col = colori[L[i]]; img.data[i * 4] = col[0]; img.data[i * 4 + 1] = col[1]; img.data[i * 4 + 2] = col[2]; img.data[i * 4 + 3] = alfa;
+
+  // maschere (quelle del gruppo evidenziato più intense, le altre attenuate)
+  if ($('mostraMaschere').checked || evidenziato) {
+    const img = new ImageData(LATO, LATO), alfa = +$('opacita').value / 100 * 255;
+    const base = $('mostraMaschere').checked ? (evidenziato ? alfa * 0.45 : alfa) : 0;
+    for (let i = 0; i < N; i++) {
+      const c = A.L[i]; if (!c) continue;
+      const sel = evidenziato && A.compGruppo[A.comp[i]] === evidenziato;
+      const col = colori[c], p = i * 4;
+      if (sel) {
+        const x = i % LATO, bordo = A.compGruppo[A.comp[i - 1]] !== evidenziato || A.compGruppo[A.comp[i + 1]] !== evidenziato ||
+          A.compGruppo[A.comp[i - LATO]] !== evidenziato || A.compGruppo[A.comp[i + LATO]] !== evidenziato || x === 0 || x === LATO - 1;
+        if (bordo) { img.data[p] = img.data[p + 1] = img.data[p + 2] = 255; img.data[p + 3] = 255; }
+        else { img.data[p] = col[0]; img.data[p + 1] = col[1]; img.data[p + 2] = col[2]; img.data[p + 3] = 200; }
+      } else if (base) { img.data[p] = col[0]; img.data[p + 1] = col[1]; img.data[p + 2] = col[2]; img.data[p + 3] = base; }
     }
     sovrapposizione.getContext('2d').putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(sovrapposizione, g.dx, g.dy, g.dw, g.dh, a.x, a.y, a.w, a.h);
   }
-  if ($('mostraEtichette').checked) {
-    const dim = Math.max(11, Math.min(14, a.w / 45));
-    ctx.font = `600 ${dim}px "Segoe UI", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(0,0,0,.85)';
-    const occupati = [];
-    for (const b of blocchi(L)) {
-      const x = a.x + (b.x + .5 - g.dx) / g.dw * a.w, y = a.y + (b.y + .5 - g.dy) / g.dh * a.h;
-      const testo = CLASSI[b.c], w = ctx.measureText(testo).width + 6, h = dim + 4;
-      const box = { x: x - w / 2, y: y - h / 2, w, h };
-      if (occupati.some(o => box.x < o.x + o.w && o.x < box.x + box.w && box.y < o.y + o.h && o.y < box.y + box.h)) continue;
-      occupati.push(box);
-      ctx.strokeText(testo, x, y); ctx.fillStyle = '#fff'; ctx.fillText(testo, x, y);
+
+  impaginato = { a, etichette: [] };
+  if (!conEtichette) return;
+
+  // etichette esterne: colonna sinistra e destra, ordinate per altezza, senza sovrapposizioni
+  ctx.font = `600 ${dim}px "Segoe UI", system-ui, sans-serif`; ctx.textBaseline = 'middle';
+  const capienza = Math.max(1, Math.floor((H - 8) / riga));
+  for (const lato of ['sx', 'dx']) {
+    let col = A.gruppi.filter(gr => gr.lato === lato);
+    if (col.length > capienza) col = col.sort((p, q) => q.area - p.area).slice(0, capienza);
+    col = col.map(gr => ({ gr, p: inSchermo(gr.ax, gr.ay) })).sort((p, q) => p.p.y - q.p.y);
+    // posizioni verticali: vicine all'altezza della struttura, distanziate di una riga
+    let y = 4 + riga / 2;
+    for (const e of col) { e.y = Math.max(e.p.y, y); y = e.y + riga; }
+    let limite = H - 4 - riga / 2;
+    for (let k = col.length - 1; k >= 0; k--) { col[k].y = Math.min(col[k].y, limite); limite = col[k].y - riga; }
+    for (const e of col) {
+      const testo = tronca(CLASSI[e.gr.c]), w = ctx.measureText(testo).width;
+      const xTesto = lato === 'sx' ? margine - 10 - w : W - margine + 10, xLinea = lato === 'sx' ? margine - 6 : W - margine + 6;
+      impaginato.etichette.push({ chiave: e.gr.chiave, x: xTesto - 4, y: e.y - riga / 2, w: w + 8, h: riga,
+                                  testo, c: e.gr.c, xTesto, xLinea, p: e.p, ye: e.y, lato, larg: w });
     }
   }
+  // prima le linee e le etichette normali, poi quella evidenziata sopra a tutte
+  const ordine = [...impaginato.etichette].sort((p, q) => (p.chiave === evidenziato) - (q.chiave === evidenziato));
+  for (const e of ordine) {
+    const sel = e.chiave === evidenziato, attenuata = evidenziato && !sel;
+    ctx.globalAlpha = attenuata ? 0.45 : 1;
+    ctx.strokeStyle = sel ? '#fff' : rgba(e.c, 0.9); ctx.lineWidth = sel ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(e.p.x, e.p.y); ctx.lineTo(e.xLinea, e.ye); ctx.stroke();
+    ctx.fillStyle = sel ? '#fff' : rgba(e.c, 1);
+    ctx.beginPath(); ctx.arc(e.p.x, e.p.y, sel ? 3.5 : 2.5, 0, 2 * Math.PI); ctx.fill();
+    if (sel) { ctx.fillStyle = rgba(e.c, 1); ctx.fillRect(e.x, e.y, e.w, e.h); }
+    ctx.fillStyle = sel ? '#000' : '#E8EEF1';
+    ctx.fillText(e.testo, e.xTesto, e.ye + 0.5);
+    if (!sel) { ctx.fillStyle = rgba(e.c, 1); ctx.fillRect(e.lato === 'sx' ? e.xTesto + e.larg + 3 : e.xTesto - 6, e.ye - 3, 3, 6); }
+  }
+  ctx.globalAlpha = 1;
 }
-function mostraSottoCursore(p) {
-  const el = $('cursore');
-  if (!risultato || !fotogramma.width) { el.style.display = 'none'; return; }
-  const a = areaImmagine(), g = risultato.geo;
+
+// ---------------- Hover: struttura ↔ etichetta ----------------
+function gruppoSotto(p) {
+  if (!impaginato || !risultato) return null;
+  const e = impaginato.etichette.find(e => p.x >= e.x && p.x <= e.x + e.w && p.y >= e.y && p.y <= e.y + e.h);
+  if (e) return { chiave: e.chiave, i: -1 };
+  const a = impaginato.a, g = risultato.geo;
   const u = Math.floor(g.dx + (p.x - a.x) / a.w * g.dw), v = Math.floor(g.dy + (p.y - a.y) / a.h * g.dh);
-  if (u < g.dx || v < g.dy || u >= g.dx + g.dw || v >= g.dy + g.dh) { el.style.display = 'none'; return; }
-  const i = v * LATO + u, c = risultato.classe[i], conf = risultato.conf[i];
-  if (!c || conf < +$('soglia').value / 100) { el.style.display = 'none'; return; }
-  el.textContent = `${CLASSI[c]} · ${Math.round(conf * 100)} %`; el.style.display = 'block';
+  if (u < g.dx || v < g.dy || u >= g.dx + g.dw || v >= g.dy + g.dh) return null;
+  const A = calcolaAnalisi(), i = v * LATO + u;
+  return A.L[i] ? { chiave: A.compGruppo[A.comp[i]], i } : null;
+}
+function aggiornaHover(p) {
+  const el = $('cursore'), trovato = gruppoSotto(p), chiave = trovato ? trovato.chiave : null;
+  if (chiave !== evidenziato) { evidenziato = chiave; disegna(); }
+  // il riquadro in alto serve solo se la struttura non ha un'etichetta visibile
+  const conEtichetta = impaginato && impaginato.etichette.some(e => e.chiave === chiave);
+  if (trovato && trovato.i >= 0 && !conEtichetta) {
+    el.textContent = `${CLASSI[analisi.L[trovato.i]]} · ${Math.round(risultato.conf[trovato.i] * 100)} %`; el.style.display = 'block';
+  } else if (trovato && trovato.i < 0) {            // etichetta accorciata: mostra il nome completo
+    const e = impaginato.etichette.find(e => e.chiave === chiave);
+    if (e && e.testo.endsWith('…')) { el.textContent = CLASSI[e.c]; el.style.display = 'block'; } else el.style.display = 'none';
+  } else el.style.display = 'none';
 }
 
 // ---------------- Finestra fluttuante ----------------
