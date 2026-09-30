@@ -59,6 +59,7 @@
   #opzioni h2 { font: 600 .8rem var(--corpo); color: var(--tenue); margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--linea); }
   #opzioni h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
   .riga { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; cursor: pointer; }
+  .riga.tutti { font-weight: 600; border-bottom: 1px solid var(--linea); padding-bottom: 6px; margin-bottom: 2px; }
   .riga small { color: var(--tenue); font-family: var(--num); }
   .passo { display: inline-flex; align-items: center; gap: 6px; }
   .passo button { width: 30px; height: 26px; padding: 0; font-size: .85rem; }
@@ -92,7 +93,8 @@
       <div id="opzioni" hidden>
         <h2>Visualizzazione</h2>
         <label class="riga">Maschera <input type="checkbox" class="switch" role="switch" id="mostraMaschere" checked></label>
-        <div class="riga">Grandezza testo
+        <label class="riga">Etichette <input type="checkbox" class="switch" role="switch" id="mostraEtichette" checked></label>
+        <div class="riga">Dimensione testo
           <span class="passo"><button id="fontMeno" aria-label="Riduci il testo">−</button><output id="fontValore">12</output><button id="fontPiu" aria-label="Ingrandisci il testo">+</button></span>
         </div>
         <h2>Nascondi elementi</h2>
@@ -100,7 +102,6 @@
       </div>
       <div class="barra">
         <button id="pausa" disabled>Pausa</button>
-        <label><input type="checkbox" id="mostraEtichette" checked> Etichette</label>
         <label>Opacità <input type="range" id="opacita" min="0" max="90" value="40"></label>
         <label title="Nasconde le zone in cui il modello è poco sicuro">Confidenza min. <input type="range" id="soglia" min="0" max="95" value="50"></label>
         <span id="stato">—</span>
@@ -175,7 +176,8 @@ const salvate = (() => { try { return JSON.parse(localStorage.getItem('annotator
 let dimFont = salvate.dimFont || 12, gruppiNascosti = new Set(salvate.gruppiNascosti || []), visibile = null, versioneFiltro = 0;
 function salvaOpzioni() {
   try { localStorage.setItem('annotatore-opzioni', JSON.stringify({ dimFont, gruppiNascosti: [...gruppiNascosti],
-                                                                     maschere: $('mostraMaschere').checked })); } catch {}
+                                                                     maschere: $('mostraMaschere').checked,
+                                                                     etichette: $('mostraEtichette').checked })); } catch {}
 }
 function aggiornaVisibili() {
   visibile = new Uint8Array(CLASSI.length).fill(1);
@@ -185,6 +187,9 @@ function aggiornaVisibili() {
 }
 function costruisciOpzioni() {
   const lista = $('listaGruppi'); lista.textContent = '';
+  const tutti = document.createElement('label'); tutti.className = 'riga tutti'; tutti.append('Tutti');
+  const swT = document.createElement('input'); swT.type = 'checkbox'; swT.className = 'switch'; swT.setAttribute('role', 'switch');
+  swT.id = 'tuttiGruppi'; tutti.append(swT); lista.append(tutti);
   for (const [nome, strutture] of GRUPPI) {
     const presenti = strutture.filter(s => CLASSI.includes(s)); if (!presenti.length) continue;
     const riga = document.createElement('label'); riga.className = 'riga'; riga.title = presenti.join(', ');
@@ -195,8 +200,10 @@ function costruisciOpzioni() {
     riga.append(testo, sw); lista.append(riga);
   }
   $('fontValore').textContent = dimFont;
-  aggiornaVisibili();
+  aggiornaTutti(); aggiornaVisibili();
 }
+// "Tutti" è acceso solo se nessun gruppo è nascosto
+function aggiornaTutti() { $('tuttiGruppi').checked = !GRUPPI.some(([nome]) => gruppiNascosti.has(nome)); }
 function mostraOpzioni(si) { $('opzioni').hidden = !si; $('ingranaggio').setAttribute('aria-expanded', si); }
 const aspetta = ms => new Promise(r => (pipWin || window).setTimeout(r, ms));   // i timer della finestra visibile non vengono rallentati
 
@@ -587,12 +594,20 @@ $('mostraMaschere').checked = salvate.maschere !== false;
 $('ingranaggio').onclick = () => mostraOpzioni($('opzioni').hidden);
 vista.addEventListener('keydown', ev => { if (ev.key === 'Escape') mostraOpzioni(false); });
 $('mostraMaschere').addEventListener('change', salvaOpzioni);
+$('mostraEtichette').checked = salvate.etichette !== false;
+$('mostraEtichette').addEventListener('change', salvaOpzioni);
 const cambiaFont = d => { dimFont = Math.min(24, Math.max(9, dimFont + d)); $('fontValore').textContent = dimFont; salvaOpzioni(); disegna(); };
 $('fontMeno').onclick = () => cambiaFont(-1);
 $('fontPiu').onclick = () => cambiaFont(1);
 $('listaGruppi').addEventListener('change', ev => {
-  const g = ev.target.dataset.gruppo; if (!g) return;
-  if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
+  if (ev.target.id === 'tuttiGruppi') {
+    gruppiNascosti = new Set(ev.target.checked ? [] : GRUPPI.map(([nome]) => nome));
+    for (const sw of $('listaGruppi').querySelectorAll('[data-gruppo]')) sw.checked = ev.target.checked;
+  } else {
+    const g = ev.target.dataset.gruppo; if (!g) return;
+    if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
+    aggiornaTutti();
+  }
   aggiornaVisibili(); salvaOpzioni(); disegna();
 });
 costruisciOpzioni();
