@@ -47,6 +47,28 @@
              background: rgba(0,0,0,.72); color: #fff; pointer-events: none; display: none; }
   .aiuto { color: var(--tenue); font-size: .88rem; margin-top: 16px; max-width: 80ch; }
   .aiuto b { color: var(--testo); font-weight: 600; }
+
+  /* Ingranaggio e pannello delle opzioni (dentro la vista: si spostano nella finestra fluttuante) */
+  #ingranaggio { position: absolute; top: 8px; right: 8px; z-index: 3; width: 34px; height: 34px; padding: 0;
+                 font-size: 19px; line-height: 1; border-radius: 50%; background: rgba(23,32,36,.88); }
+  #ingranaggio[aria-expanded=true] { background: var(--accento); border-color: var(--accento); color: var(--accento-testo); }
+  #opzioni { position: absolute; top: 48px; right: 8px; z-index: 3; width: min(280px, calc(100% - 16px));
+             max-height: calc(100% - 100px); overflow-y: auto; padding: 10px 12px; font-size: .85rem;
+             background: var(--pannello); border: 1px solid var(--linea); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,.55); }
+  #opzioni[hidden] { display: none; }
+  #opzioni h2 { font: 600 .8rem var(--corpo); color: var(--tenue); margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--linea); }
+  #opzioni h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+  .riga { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; cursor: pointer; }
+  .riga small { color: var(--tenue); font-family: var(--num); }
+  .passo { display: inline-flex; align-items: center; gap: 6px; }
+  .passo button { width: 30px; height: 26px; padding: 0; font-size: .85rem; }
+  .passo output { font-family: var(--num); min-width: 2.5ch; text-align: center; }
+  input.switch { appearance: none; flex: none; margin: 0; width: 34px; height: 18px; border-radius: 9px; position: relative;
+                 background: var(--linea); cursor: pointer; transition: background .15s; }
+  input.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+                        background: var(--tenue); transition: transform .15s; }
+  input.switch:checked { background: var(--accento); }
+  input.switch:checked::after { transform: translateX(16px); background: var(--accento-testo); }
 </style>
 </head>
 <body>
@@ -66,9 +88,18 @@
       <video id="video" muted playsinline></video>
       <canvas id="tela" aria-label="Immagine RM con strutture etichettate"></canvas>
       <div id="cursore"></div>
+      <button id="ingranaggio" aria-label="Opzioni" title="Opzioni" aria-expanded="false" aria-controls="opzioni">&#9881;&#xFE0E;</button>
+      <div id="opzioni" hidden>
+        <h2>Visualizzazione</h2>
+        <label class="riga">Maschera <input type="checkbox" class="switch" role="switch" id="mostraMaschere" checked></label>
+        <div class="riga">Grandezza testo
+          <span class="passo"><button id="fontMeno" aria-label="Riduci il testo">−</button><output id="fontValore">12</output><button id="fontPiu" aria-label="Ingrandisci il testo">+</button></span>
+        </div>
+        <h2>Nascondi elementi</h2>
+        <div id="listaGruppi"></div>
+      </div>
       <div class="barra">
         <button id="pausa" disabled>Pausa</button>
-        <label><input type="checkbox" id="mostraMaschere" checked> Maschere</label>
         <label><input type="checkbox" id="mostraEtichette" checked> Etichette</label>
         <label>Opacità <input type="range" id="opacita" min="0" max="90" value="40"></label>
         <label title="Nasconde le zone in cui il modello è poco sicuro">Confidenza min. <input type="range" id="soglia" min="0" max="95" value="50"></label>
@@ -104,6 +135,25 @@ let CLASSI = ["sfondo", "sostanza bianca cerebrale", "ventricolo laterale", "cor
   "cingolo anteriore rostrale", "giro frontale medio rostrale", "giro frontale superiore", "lobulo parietale superiore",
   "giro temporale superiore", "giro sopramarginale", "polo frontale", "polo temporale", "giro temporale trasverso (Heschl)", "insula"];
 
+// Gruppi nascondibili (per nome, così restano validi anche se config_app.json cambia l'ordine delle classi)
+const GRUPPI = [
+  ['Lobo frontale', ['giro frontale superiore', 'giro frontale medio rostrale', 'giro frontale medio caudale', 'pars opercularis',
+    'pars triangularis', 'pars orbitalis', 'corteccia orbitofrontale laterale', 'corteccia orbitofrontale mediale',
+    'giro precentrale', 'lobulo paracentrale', 'polo frontale']],
+  ['Lobo parietale', ['giro postcentrale', 'lobulo parietale superiore', 'lobulo parietale inferiore', 'giro sopramarginale', 'precuneo']],
+  ['Lobo temporale', ['giro temporale superiore', 'giro temporale medio', 'giro temporale inferiore', 'banca del solco temporale superiore',
+    'giro temporale trasverso (Heschl)', 'giro fusiforme', 'corteccia entorinale', 'giro paraippocampale', 'polo temporale']],
+  ['Lobo occipitale', ['corteccia occipitale laterale', 'cuneo', 'giro linguale', 'corteccia pericalcarina']],
+  ['Cingolo', ['cingolo anteriore rostrale', 'cingolo anteriore caudale', 'cingolo posteriore', 'istmo del cingolo']],
+  ['Insula e altra corteccia', ['insula', 'corteccia cerebrale non classificata']],
+  ['Sostanza bianca', ['sostanza bianca cerebrale']],
+  ['Gangli della base', ['nucleo caudato', 'putamen', 'globo pallido', 'nucleo accumbens']],
+  ['Talamo e diencefalo', ['talamo', 'diencefalo ventrale', 'chiasma ottico']],
+  ['Ippocampo e amigdala', ['ippocampo', 'amigdala']],
+  ['Ventricoli', ['ventricolo laterale', 'corno temporale del ventricolo laterale', 'terzo ventricolo', 'quarto ventricolo', 'plesso corioideo']],
+  ['Tronco e cervelletto', ['tronco encefalico', 'corteccia cerebellare', 'sostanza bianca cerebellare']],
+];
+
 // ---------------- Stato ----------------
 // gli elementi della vista si spostano nella finestra fluttuante: vanno cercati anche lì
 const $ = id => document.getElementById(id) || (pipWin && pipWin.document.getElementById(id));
@@ -120,6 +170,34 @@ const sovrapposizione = document.createElement('canvas'); sovrapposizione.width 
 
 const messaggio = (t, errore = false) => { $('messaggio').textContent = t; $('messaggio').className = errore ? 'errore' : ''; };
 const stato = html => { $('stato').innerHTML = html; };
+// opzioni del pannello (ricordate nel browser)
+const salvate = (() => { try { return JSON.parse(localStorage.getItem('annotatore-opzioni')) || {}; } catch { return {}; } })();
+let dimFont = salvate.dimFont || 12, gruppiNascosti = new Set(salvate.gruppiNascosti || []), visibile = null, versioneFiltro = 0;
+function salvaOpzioni() {
+  try { localStorage.setItem('annotatore-opzioni', JSON.stringify({ dimFont, gruppiNascosti: [...gruppiNascosti],
+                                                                     maschere: $('mostraMaschere').checked })); } catch {}
+}
+function aggiornaVisibili() {
+  visibile = new Uint8Array(CLASSI.length).fill(1);
+  for (const [nome, strutture] of GRUPPI) if (gruppiNascosti.has(nome))
+    for (const s of strutture) { const c = CLASSI.indexOf(s); if (c > 0) visibile[c] = 0; }
+  versioneFiltro++;
+}
+function costruisciOpzioni() {
+  const lista = $('listaGruppi'); lista.textContent = '';
+  for (const [nome, strutture] of GRUPPI) {
+    const presenti = strutture.filter(s => CLASSI.includes(s)); if (!presenti.length) continue;
+    const riga = document.createElement('label'); riga.className = 'riga'; riga.title = presenti.join(', ');
+    const testo = document.createElement('span'); testo.append(nome + ' ');
+    const n = document.createElement('small'); n.textContent = presenti.length; testo.append(n);
+    const sw = document.createElement('input'); sw.type = 'checkbox'; sw.className = 'switch'; sw.setAttribute('role', 'switch');
+    sw.checked = !gruppiNascosti.has(nome); sw.dataset.gruppo = nome;
+    riga.append(testo, sw); lista.append(riga);
+  }
+  $('fontValore').textContent = dimFont;
+  aggiornaVisibili();
+}
+function mostraOpzioni(si) { $('opzioni').hidden = !si; $('ingranaggio').setAttribute('aria-expanded', si); }
 const aspetta = ms => new Promise(r => (pipWin || window).setTimeout(r, ms));   // i timer della finestra visibile non vengono rallentati
 
 function preparaColori() {
@@ -136,7 +214,7 @@ function preparaColori() {
 async function caricaModello() {
   try {
     try { const c = await (await fetch(FILE_CONFIG)).json(); if (Array.isArray(c.classi)) CLASSI = c.classi; } catch {}
-    preparaColori();
+    preparaColori(); costruisciOpzioni();
     ort.env.wasm.wasmPaths = new URL('ort/', location.href).href;
     ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
     const w = await fetch('ort/ort-wasm-simd-threaded.wasm');
@@ -205,6 +283,7 @@ function disegnaSelezione() {
 }
 function posizione(ev) { const r = tela.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; }
 tela.addEventListener('pointerdown', ev => {
+  mostraOpzioni(false);
   if (!selezionando) return;
   const p = posizione(ev); trascina = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; tela.setPointerCapture(ev.pointerId);
 });
@@ -304,9 +383,9 @@ let evidenziato = null;      // chiave del gruppo sotto il mouse
 
 function calcolaAnalisi() {
   const soglia = +$('soglia').value / 100;
-  if (analisi && analisi.risultato === risultato && analisi.soglia === soglia) return analisi;
+  if (analisi && analisi.risultato === risultato && analisi.soglia === soglia && analisi.filtro === versioneFiltro) return analisi;
   const L = new Uint8Array(N);
-  for (let i = 0; i < N; i++) L[i] = risultato.conf[i] >= soglia ? risultato.classe[i] : 0;
+  for (let i = 0; i < N; i++) L[i] = risultato.conf[i] >= soglia && visibile[risultato.classe[i]] ? risultato.classe[i] : 0;
   // distanza dal bordo del proprio blocco (per ancorare la linea nel punto più interno)
   const d = new Float32Array(N), INF = 1e9;
   for (let i = 0; i < N; i++) {
@@ -351,7 +430,7 @@ function calcolaAnalisi() {
     if (area > g.maxArea) { g.maxArea = area; g.ax = ax; g.ay = ay; }
     compGruppo[id] = chiave;
   }
-  analisi = { risultato, soglia, L, comp, compGruppo,
+  analisi = { risultato, soglia, filtro: versioneFiltro, L, comp, compGruppo,
               gruppi: [...gruppi.values()].filter(g => g.maxArea >= AREA_MIN_ETICHETTA) };
   return analisi;
 }
@@ -380,7 +459,7 @@ function disegna() {
   const ctx = preparaTela(); impaginato = null; if (!ctx) return;
   if (!risultato || !fotogramma.width) return;
   const conEtichette = $('mostraEtichette').checked, W = tela.clientWidth, H = tela.clientHeight;
-  const dim = 12, riga = dim + 5;
+  const dim = dimFont, riga = dim + 5;
   const A = calcolaAnalisi(), g = risultato.geo;
   ctx.font = `600 ${dim}px "Segoe UI", system-ui, sans-serif`;
   // margini laterali larghi quanto serve all'etichetta più lunga (max 30 % della larghezza)
@@ -504,6 +583,19 @@ $('pip').onclick = apriPiP;
 $('pausa').onclick = () => { inPausa = !inPausa; $('pausa').textContent = inPausa ? 'Riprendi' : 'Pausa'; if (!inPausa) ultimaMiniatura = null; };
 for (const id of ['mostraMaschere', 'mostraEtichette', 'opacita', 'soglia']) $(id).addEventListener('input', disegna);
 window.addEventListener('resize', () => { if (!pipWin) disegna(); });
+$('mostraMaschere').checked = salvate.maschere !== false;
+$('ingranaggio').onclick = () => mostraOpzioni($('opzioni').hidden);
+vista.addEventListener('keydown', ev => { if (ev.key === 'Escape') mostraOpzioni(false); });
+$('mostraMaschere').addEventListener('change', salvaOpzioni);
+const cambiaFont = d => { dimFont = Math.min(24, Math.max(9, dimFont + d)); $('fontValore').textContent = dimFont; salvaOpzioni(); disegna(); };
+$('fontMeno').onclick = () => cambiaFont(-1);
+$('fontPiu').onclick = () => cambiaFont(1);
+$('listaGruppi').addEventListener('change', ev => {
+  const g = ev.target.dataset.gruppo; if (!g) return;
+  if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
+  aggiornaVisibili(); salvaOpzioni(); disegna();
+});
+costruisciOpzioni();
 if (typeof ort === 'undefined') messaggio('Libreria di calcolo non trovata: controlla la cartella ort.', true);
 else if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) messaggio('Questo browser non permette la cattura dello schermo.', true);
 else caricaModello();
