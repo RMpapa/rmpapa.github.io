@@ -59,11 +59,17 @@
   #opzioni h2 { font: 600 .8rem var(--corpo); color: var(--tenue); margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--linea); }
   #opzioni h2:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
   .riga { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; cursor: pointer; }
-  .riga.tutti { font-weight: 600; border-bottom: 1px solid var(--linea); padding-bottom: 6px; margin-bottom: 2px; }
   .riga small { color: var(--tenue); font-family: var(--num); }
   .passo { display: inline-flex; align-items: center; gap: 6px; }
   .passo button { width: 30px; height: 26px; padding: 0; font-size: .85rem; }
   .passo output { font-family: var(--num); min-width: 2.5ch; text-align: center; }
+  .scelta { display: flex; gap: 6px; }
+  .scelta button { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px;
+                   font-size: .85rem; text-align: left; }
+  .scelta button small { font-weight: 400; color: var(--tenue); font-size: .75rem; }
+  .scelta button[aria-pressed=true] { background: var(--accento); border-color: var(--accento); color: var(--accento-testo); }
+  .scelta button[aria-pressed=true] small { color: var(--accento-testo); opacity: .8; }
+  #notaModello { margin: 6px 0 0; color: var(--tenue); font-size: .78rem; }
   input.switch { appearance: none; flex: none; margin: 0; width: 34px; height: 18px; border-radius: 9px; position: relative;
                  background: var(--linea); cursor: pointer; transition: background .15s; }
   input.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
@@ -91,10 +97,12 @@
       <div id="cursore"></div>
       <button id="ingranaggio" aria-label="Opzioni" title="Opzioni" aria-expanded="false" aria-controls="opzioni">&#9881;&#xFE0E;</button>
       <div id="opzioni" hidden>
+        <h2>Modello</h2>
+        <div class="scelta" id="sceltaModello" role="group" aria-label="Versione del modello"></div>
+        <p id="notaModello">Al cambio la slice corrente viene rianalizzata.</p>
         <h2>Visualizzazione</h2>
         <label class="riga">Maschera <input type="checkbox" class="switch" role="switch" id="mostraMaschere" checked></label>
-        <label class="riga">Etichette <input type="checkbox" class="switch" role="switch" id="mostraEtichette" checked></label>
-        <div class="riga">Dimensione testo
+        <div class="riga">Grandezza testo
           <span class="passo"><button id="fontMeno" aria-label="Riduci il testo">−</button><output id="fontValore">12</output><button id="fontPiu" aria-label="Ingrandisci il testo">+</button></span>
         </div>
         <h2>Nascondi elementi</h2>
@@ -102,6 +110,7 @@
       </div>
       <div class="barra">
         <button id="pausa" disabled>Pausa</button>
+        <label><input type="checkbox" id="mostraEtichette" checked> Etichette</label>
         <label>Opacità <input type="range" id="opacita" min="0" max="90" value="40"></label>
         <label title="Nasconde le zone in cui il modello è poco sicuro">Confidenza min. <input type="range" id="soglia" min="0" max="95" value="50"></label>
         <span id="stato">—</span>
@@ -120,11 +129,15 @@
 <script>
 // ---------------- Configurazione ----------------
 const LATO = 256, N = LATO * LATO;
-const FILE_MODELLO = 'modelli/modello_int8.onnx', FILE_CONFIG = 'modelli/config_app.json';
+// Versioni del modello: la PRIMA è quella caricata all'avvio (l'ultima). Le altre si caricano solo quando vengono scelte.
+const MODELLI = [
+  { id: 'v2', nome: 'v2', descr: 'T1, T2 e FLAIR', file: 'modelli/v2/modello_int8.onnx', config: 'modelli/v2/config_app.json' },
+  { id: 'v1', nome: 'v1', descr: 'solo T1',        file: 'modelli/v1/modello_int8.onnx', config: 'modelli/v1/config_app.json' },
+];
 const SOGLIA_NERO = 8;          // pixel più scuri di così, collegati al bordo, sono sfondo
 const SOGLIA_CAMBIO = 1.5;      // differenza media (0-255) sulla miniatura per rianalizzare
 const AREA_MIN_ETICHETTA = 30;  // pixel (a 256x256) sotto cui un blocco non riceve la scritta
-let CLASSI = ["sfondo", "sostanza bianca cerebrale", "ventricolo laterale", "corno temporale del ventricolo laterale",
+let CLASSI_BASE, CLASSI = ["sfondo", "sostanza bianca cerebrale", "ventricolo laterale", "corno temporale del ventricolo laterale",
   "terzo ventricolo", "quarto ventricolo", "plesso corioideo", "talamo", "nucleo caudato", "putamen", "globo pallido",
   "ippocampo", "amigdala", "nucleo accumbens", "diencefalo ventrale", "tronco encefalico", "corteccia cerebellare",
   "sostanza bianca cerebellare", "chiasma ottico", "corteccia cerebrale non classificata",
@@ -159,6 +172,8 @@ const GRUPPI = [
 // gli elementi della vista si spostano nella finestra fluttuante: vanno cercati anche lì
 const $ = id => document.getElementById(id) || (pipWin && pipWin.document.getElementById(id));
 const video = $('video'), tela = $('tela'), vista = $('vista');
+const sessioni = new Map();      // modelli già caricati: il ritorno a una versione già usata è immediato
+let modelloAttivo = null, caricandoModello = false, ortPronto = false;
 let sessione = null, stream = null, riquadro = null, pipWin = null;
 let inCorso = false, inPausa = false, selezionando = false, trascina = null;
 let ultimaMiniatura = null, risultato = null, colori = [];
@@ -176,8 +191,7 @@ const salvate = (() => { try { return JSON.parse(localStorage.getItem('annotator
 let dimFont = salvate.dimFont || 12, gruppiNascosti = new Set(salvate.gruppiNascosti || []), visibile = null, versioneFiltro = 0;
 function salvaOpzioni() {
   try { localStorage.setItem('annotatore-opzioni', JSON.stringify({ dimFont, gruppiNascosti: [...gruppiNascosti],
-                                                                     maschere: $('mostraMaschere').checked,
-                                                                     etichette: $('mostraEtichette').checked })); } catch {}
+                                                                     maschere: $('mostraMaschere').checked })); } catch {}
 }
 function aggiornaVisibili() {
   visibile = new Uint8Array(CLASSI.length).fill(1);
@@ -187,9 +201,6 @@ function aggiornaVisibili() {
 }
 function costruisciOpzioni() {
   const lista = $('listaGruppi'); lista.textContent = '';
-  const tutti = document.createElement('label'); tutti.className = 'riga tutti'; tutti.append('Tutti');
-  const swT = document.createElement('input'); swT.type = 'checkbox'; swT.className = 'switch'; swT.setAttribute('role', 'switch');
-  swT.id = 'tuttiGruppi'; tutti.append(swT); lista.append(tutti);
   for (const [nome, strutture] of GRUPPI) {
     const presenti = strutture.filter(s => CLASSI.includes(s)); if (!presenti.length) continue;
     const riga = document.createElement('label'); riga.className = 'riga'; riga.title = presenti.join(', ');
@@ -200,10 +211,8 @@ function costruisciOpzioni() {
     riga.append(testo, sw); lista.append(riga);
   }
   $('fontValore').textContent = dimFont;
-  aggiornaTutti(); aggiornaVisibili();
+  aggiornaVisibili();
 }
-// "Tutti" è acceso solo se nessun gruppo è nascosto
-function aggiornaTutti() { $('tuttiGruppi').checked = !GRUPPI.some(([nome]) => gruppiNascosti.has(nome)); }
 function mostraOpzioni(si) { $('opzioni').hidden = !si; $('ingranaggio').setAttribute('aria-expanded', si); }
 const aspetta = ms => new Promise(r => (pipWin || window).setTimeout(r, ms));   // i timer della finestra visibile non vengono rallentati
 
@@ -218,29 +227,88 @@ function preparaColori() {
 }
 
 // ---------------- Modello ----------------
-async function caricaModello() {
-  try {
-    try { const c = await (await fetch(FILE_CONFIG)).json(); if (Array.isArray(c.classi)) CLASSI = c.classi; } catch {}
-    preparaColori(); costruisciOpzioni();
-    ort.env.wasm.wasmPaths = new URL('ort/', location.href).href;
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-    const w = await fetch('ort/ort-wasm-simd-threaded.wasm');
-    ort.env.wasm.wasmBinary = new Uint8Array(await w.arrayBuffer());
+function avviso(t, errore = false) { messaggio(t, errore); if (pipWin || stream) stato(errore ? 'errore modello' : t); }
 
-    const r = await fetch(FILE_MODELLO);
-    if (!r.ok) throw new Error(`modello non trovato (${FILE_MODELLO}, HTTP ${r.status})`);
-    const totale = +r.headers.get('content-length') || 0, lettore = r.body.getReader(), pezzi = [];
-    let letti = 0;
+function aggiornaScelta() {
+  const box = $('sceltaModello'); box.textContent = '';
+  for (const m of MODELLI) {
+    const b = document.createElement('button'); b.type = 'button'; b.dataset.modello = m.id;
+    b.setAttribute('aria-pressed', modelloAttivo && modelloAttivo.id === m.id ? 'true' : 'false');
+    b.disabled = caricandoModello;
+    const d = document.createElement('small'); d.textContent = m.descr + (m === MODELLI[0] ? ', più recente' : '');
+    b.append(m.nome, d); box.append(b);
+  }
+}
+
+async function preparaOrt() {
+  if (ortPronto) return;
+  ort.env.wasm.wasmPaths = new URL('ort/', location.href).href;
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  const w = await fetch('ort/ort-wasm-simd-threaded.wasm');
+  ort.env.wasm.wasmBinary = new Uint8Array(await w.arrayBuffer());
+  ortPronto = true;
+}
+
+async function scarica(url, avanzamento) {   // file intero, oppure diviso in parti .part0, .part1, … (limite di GitHub)
+  let r = await fetch(url), parti = [r];
+  if (!r.ok) {
+    parti = [];
+    for (let i = 0; ; i++) { const p = await fetch(`${url.replace(/\.onnx$/, '')}.part${i}`); if (!p.ok) break; parti.push(p); }
+    if (!parti.length) throw new Error(`file non trovato (${url}, HTTP ${r.status})`);
+  }
+  const totale = parti.reduce((t, p) => t + (+p.headers.get('content-length') || 0), 0), pezzi = [];
+  let letti = 0;
+  for (const p of parti) {
+    const lettore = p.body.getReader();
     for (;;) {
       const { done, value } = await lettore.read(); if (done) break;
       pezzi.push(value); letti += value.length;
-      if (totale) messaggio(`Caricamento del modello… ${Math.round(letti / totale * 100)} %`);
+      if (totale) avanzamento(Math.min(100, Math.round(letti / totale * 100)));
     }
-    const byte = new Uint8Array(letti); let o = 0; for (const p of pezzi) { byte.set(p, o); o += p.length; }
-    sessione = await ort.InferenceSession.create(byte, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
-    messaggio(`Modello pronto (${ort.env.wasm.numThreads} thread). Clicca "Avvia cattura".`);
-    $('avvia').disabled = false;
-  } catch (e) { messaggio('Errore nel caricamento del modello: ' + (e.message || e), true); }
+  }
+  const byte = new Uint8Array(letti); let o = 0; for (const q of pezzi) { byte.set(q, o); o += q.length; }
+  return byte;
+}
+
+async function usaModello(id) {
+  const m = MODELLI.find(x => x.id === id);
+  if (!m || caricandoModello || (modelloAttivo === m && sessione)) return false;
+  caricandoModello = true; aggiornaScelta();
+  try {
+    await preparaOrt();
+    let voce = sessioni.get(id);
+    if (!voce) {
+      let classi = CLASSI_BASE;
+      try { const c = await (await fetch(m.config)).json(); if (Array.isArray(c.classi)) classi = c.classi; } catch {}
+      const byte = await scarica(m.file, p => avviso(`Caricamento del modello ${m.nome}… ${p} %`));
+      voce = { classi, sess: await ort.InferenceSession.create(byte, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }) };
+      sessioni.set(id, voce);
+    }
+    while (inCorso) await aspetta(50);                  // non cambiare modello a metà di un'analisi
+    sessione = voce.sess; CLASSI = voce.classi; modelloAttivo = m;
+    preparaColori(); costruisciOpzioni();
+    avviso(`Modello ${m.nome} (${m.descr}) pronto, ${ort.env.wasm.numThreads} thread.` + (stream ? '' : ' Clicca "Avvia cattura".'));
+    if (!stream) $('avvia').disabled = false;
+    if (riquadro && stream && video.videoWidth) {        // rianalisi immediata della slice corrente, anche in pausa
+      ultimaMiniatura = null;
+      if (inPausa) analizza().catch(e => messaggio('Errore di analisi: ' + (e.message || e), true));
+    }
+    return true;
+  } catch (e) {
+    avviso(`Modello ${m.nome} non disponibile: ${e.message || e}` + (modelloAttivo ? `. Resta attivo ${modelloAttivo.nome}.` : ''), true);
+    return false;
+  } finally { caricandoModello = false; aggiornaScelta(); }
+}
+
+async function caricaModello() {                        // all'avvio: l'ultima versione; se manca, la precedente
+  const mancanti = [];
+  for (const m of MODELLI) {
+    if (await usaModello(m.id)) {
+      if (mancanti.length) messaggio($('messaggio').textContent + ` (${mancanti.join(', ')} non trovato in ${MODELLI[0].file.replace(/[^/]+$/, '')}: controlla il caricamento su GitHub)`, true);
+      return;
+    }
+    mancanti.push(m.nome);
+  }
 }
 
 // ---------------- Cattura ----------------
@@ -359,7 +427,7 @@ async function analizza() {
   const ms = performance.now() - t;
   risultato = { classe: out.classe.data, conf: out.confidenza.data, geo, centro: prep.centro };
   inCorso = false;
-  stato(`<span class="ok">●</span> ${Math.round(ms)} ms`);
+  stato(`<span class="ok">●</span> ${modelloAttivo ? modelloAttivo.nome + ' ' : ''}${Math.round(ms)} ms`);
   disegna();
 }
 
@@ -594,23 +662,19 @@ $('mostraMaschere').checked = salvate.maschere !== false;
 $('ingranaggio').onclick = () => mostraOpzioni($('opzioni').hidden);
 vista.addEventListener('keydown', ev => { if (ev.key === 'Escape') mostraOpzioni(false); });
 $('mostraMaschere').addEventListener('change', salvaOpzioni);
-$('mostraEtichette').checked = salvate.etichette !== false;
-$('mostraEtichette').addEventListener('change', salvaOpzioni);
 const cambiaFont = d => { dimFont = Math.min(24, Math.max(9, dimFont + d)); $('fontValore').textContent = dimFont; salvaOpzioni(); disegna(); };
 $('fontMeno').onclick = () => cambiaFont(-1);
 $('fontPiu').onclick = () => cambiaFont(1);
 $('listaGruppi').addEventListener('change', ev => {
-  if (ev.target.id === 'tuttiGruppi') {
-    gruppiNascosti = new Set(ev.target.checked ? [] : GRUPPI.map(([nome]) => nome));
-    for (const sw of $('listaGruppi').querySelectorAll('[data-gruppo]')) sw.checked = ev.target.checked;
-  } else {
-    const g = ev.target.dataset.gruppo; if (!g) return;
-    if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
-    aggiornaTutti();
-  }
+  const g = ev.target.dataset.gruppo; if (!g) return;
+  if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
   aggiornaVisibili(); salvaOpzioni(); disegna();
 });
-costruisciOpzioni();
+$('sceltaModello').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-modello]'); if (b) usaModello(b.dataset.modello);
+});
+CLASSI_BASE = CLASSI;
+costruisciOpzioni(); aggiornaScelta();
 if (typeof ort === 'undefined') messaggio('Libreria di calcolo non trovata: controlla la cartella ort.', true);
 else if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) messaggio('Questo browser non permette la cattura dello schermo.', true);
 else caricaModello();
