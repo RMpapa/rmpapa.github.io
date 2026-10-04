@@ -63,7 +63,7 @@
     <button id="avvia">Avvia il test</button>
     <button id="interrompi" class="secondario" hidden>Interrompi</button>
     <div id="stato" role="status" aria-live="polite"></div>
-    <p class="nota">La pagina si ricarica da sola tra una prova e l'altra: serve per cambiare il numero di thread. Durata: 1–5 minuti.</p>
+    <p class="nota">La pagina si ricarica da sola tra una prova e l'altra: serve per cambiare il numero di thread. Durata: 2–8 minuti.</p>
   </div>
 
   <section id="sezioneRisultati" hidden>
@@ -83,8 +83,8 @@
 
 <script>
 const MODELLI = {
-  leggero:  { nome: 'Leggero',  parti: ['modelli/leggero_int8.onnx'] },
-  standard: { nome: 'Standard', parti: ['modelli/standard_int8.part0', 'modelli/standard_int8.part1'] },
+  leggero:  { nome: 'Leggero',  parti: ['modelli/test/leggero_int8.onnx'] },
+  standard: { nome: 'Standard', parti: ['modelli/test/standard_int8.part0', 'modelli/test/standard_int8.part1'] },
 };
 const RIPETIZIONI = 8, LATO = 256, CHIAVE = 'testVelocitaRM';
 const $ = id => document.getElementById(id);
@@ -201,7 +201,7 @@ function avvia() {
   const scelti = [...document.querySelectorAll('input[name=modello]:checked')].map(i => i.value);
   if (!scelti.length) { $('stato').textContent = 'Scegli almeno un modello.'; return; }
   const a = ambiente();
-  const thread = a.isolato ? [1, 2, 4].filter(n => n <= a.cpu) : [1];
+  const thread = a.isolato ? [1, 2, 4, 6, 8].filter(n => n <= a.cpu) : [1];
   const piano = scelti.flatMap(modello => thread.map(t => ({ modello, thread: t })));
   salva({ piano, indice: 0, risultati: [], ambiente: a });
   location.replace(location.pathname + '?prova');
