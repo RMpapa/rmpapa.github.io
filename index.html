@@ -45,7 +45,7 @@
   #stato .ok { color: var(--ok); }
   #cursore { position: absolute; top: 8px; left: 8px; padding: 3px 8px; border-radius: 3px; font-size: .85rem;
              background: rgba(0,0,0,.72); color: #fff; pointer-events: none; display: none; }
-  .aiuto { color: var(--tenue); font-size: .88rem; margin-top: 16px; max-width: 80ch; }
+  .aiuto { color: var(--tenue); font-size: .88rem; margin: 0 0 18px; }
   .aiuto b { color: var(--testo); font-weight: 600; }
 
   /* Ingranaggio e pannello delle opzioni (dentro la vista: si spostano nella finestra fluttuante) */
@@ -93,6 +93,8 @@
 <body>
 <main>
   <h1>Atlante RM live</h1>
+  <p class="aiuto">
+    <b>1.</b> Apri una nuova pagina, clicca <b>Avvia cattura</b> e scegli la scheda del PACS &nbsp; <b>2.</b> Trascina un rettangolo sull'immagine &nbsp; <b>3.</b> Apri la <b>finestra fluttuante</b></p>
 
   <div class="passi">
     <button id="avvia" class="primario" disabled><span class="n">1</span>Avvia cattura</button>
@@ -128,11 +130,6 @@
     </div>
   </div>
 
-  <div class="aiuto">
-    <p><b>1.</b> Apri una nuova pagina, clicca <b>Avvia cattura</b> e scegli la scheda del PACS.
-       <b>2.</b> Trascina un rettangolo sull'immagine RM, escludendo menu e scritte.
-       <b>3.</b> Apri la <b>finestra fluttuante</b> e torna al PACS: le etichette si aggiornano quando cambi slice.</p>
-  </div>
 </main>
 
 <script>
