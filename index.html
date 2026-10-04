@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Annotatore RM</title>
+<title>Atlante RM live</title>
 <script src="coi-serviceworker.min.js"></script>
 <script src="ort/ort.wasm.min.js"></script>
 <style id="stili">
@@ -63,13 +63,25 @@
   .passo { display: inline-flex; align-items: center; gap: 6px; }
   .passo button { width: 30px; height: 26px; padding: 0; font-size: .85rem; }
   .passo output { font-family: var(--num); min-width: 2.5ch; text-align: center; }
+  .gruppo-riga { display: flex; align-items: center; gap: 2px; }
+  .gruppo-riga .riga { flex: 1; }
+  .freccia { flex: none; width: 22px; height: 22px; padding: 0; border: 0; background: none; color: var(--tenue);
+             font-size: .7rem; line-height: 1; transition: transform .15s; }
+  .freccia[aria-expanded=true] { transform: rotate(90deg); color: var(--testo); }
+  .spazio-freccia { flex: none; width: 22px; }
+  .figli { margin: 0 0 4px 24px; padding-left: 8px; border-left: 1px solid var(--linea); font-size: .8rem; }
+  .figli[hidden] { display: none; }
+  .figli .riga { padding: 2px 0; }
+  .riga-tutti { padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--linea); font-weight: 600; }
+  input.switch:indeterminate { background: var(--linea); }
+  input.switch:indeterminate::after { transform: translateX(8px); background: var(--accento); }
+  @media (prefers-reduced-motion: reduce) { .freccia, input.switch, input.switch::after { transition: none; } }
   .scelta { display: flex; gap: 6px; }
   .scelta button { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px;
                    font-size: .85rem; text-align: left; }
   .scelta button small { font-weight: 400; color: var(--tenue); font-size: .75rem; }
   .scelta button[aria-pressed=true] { background: var(--accento); border-color: var(--accento); color: var(--accento-testo); }
   .scelta button[aria-pressed=true] small { color: var(--accento-testo); opacity: .8; }
-  #notaModello { margin: 6px 0 0; color: var(--tenue); font-size: .78rem; }
   input.switch { appearance: none; flex: none; margin: 0; width: 34px; height: 18px; border-radius: 9px; position: relative;
                  background: var(--linea); cursor: pointer; transition: background .15s; }
   input.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
@@ -80,8 +92,7 @@
 </head>
 <body>
 <main>
-  <h1>Annotatore RM</h1>
-  <p class="sotto">Uso didattico: le etichette sono generate da un modello e possono essere errate. Le immagini restano nel browser.</p>
+  <h1>Atlante RM live</h1>
 
   <div class="passi">
     <button id="avvia" class="primario" disabled><span class="n">1</span>Avvia cattura</button>
@@ -99,9 +110,9 @@
       <div id="opzioni" hidden>
         <h2>Modello</h2>
         <div class="scelta" id="sceltaModello" role="group" aria-label="Versione del modello"></div>
-        <p id="notaModello">Al cambio la slice corrente viene rianalizzata.</p>
         <h2>Visualizzazione</h2>
         <label class="riga">Maschera <input type="checkbox" class="switch" role="switch" id="mostraMaschere" checked></label>
+        <label class="riga">Etichette <input type="checkbox" class="switch" role="switch" id="mostraEtichette" checked></label>
         <div class="riga">Grandezza testo
           <span class="passo"><button id="fontMeno" aria-label="Riduci il testo">−</button><output id="fontValore">12</output><button id="fontPiu" aria-label="Ingrandisci il testo">+</button></span>
         </div>
@@ -110,7 +121,6 @@
       </div>
       <div class="barra">
         <button id="pausa" disabled>Pausa</button>
-        <label><input type="checkbox" id="mostraEtichette" checked> Etichette</label>
         <label>Opacità <input type="range" id="opacita" min="0" max="90" value="40"></label>
         <label title="Nasconde le zone in cui il modello è poco sicuro">Confidenza min. <input type="range" id="soglia" min="0" max="95" value="50"></label>
         <span id="stato">—</span>
@@ -119,10 +129,9 @@
   </div>
 
   <div class="aiuto">
-    <p><b>1.</b> Apri questa pagina con Ctrl+T nella stessa finestra del PACS, clicca <b>Avvia cattura</b> e scegli la scheda del PACS.
+    <p><b>1.</b> Apri una nuova pagina, clicca <b>Avvia cattura</b> e scegli la scheda del PACS.
        <b>2.</b> Trascina un rettangolo sull'immagine RM, escludendo menu e scritte.
        <b>3.</b> Apri la <b>finestra fluttuante</b> e torna al PACS: le etichette si aggiornano quando cambi slice.</p>
-    <p>Passa il mouse su una struttura o su un'etichetta per evidenziarle entrambe. Destra e sinistra non sono distinte dal modello: ogni lato dell'immagine ha le sue etichette.</p>
   </div>
 </main>
 
@@ -159,7 +168,7 @@ const GRUPPI = [
     'giro temporale trasverso (Heschl)', 'giro fusiforme', 'corteccia entorinale', 'giro paraippocampale', 'polo temporale']],
   ['Lobo occipitale', ['corteccia occipitale laterale', 'cuneo', 'giro linguale', 'corteccia pericalcarina']],
   ['Cingolo', ['cingolo anteriore rostrale', 'cingolo anteriore caudale', 'cingolo posteriore', 'istmo del cingolo']],
-  ['Insula e altra corteccia', ['insula', 'corteccia cerebrale non classificata']],
+  ['Insula e altra corteccia', ['insula', 'insula (o corteccia non classificata)', 'corteccia cerebrale non classificata']],
   ['Sostanza bianca', ['sostanza bianca cerebrale']],
   ['Gangli della base', ['nucleo caudato', 'putamen', 'globo pallido', 'nucleo accumbens']],
   ['Talamo e diencefalo', ['talamo', 'diencefalo ventrale', 'chiasma ottico']],
@@ -188,30 +197,70 @@ const messaggio = (t, errore = false) => { $('messaggio').textContent = t; $('me
 const stato = html => { $('stato').innerHTML = html; };
 // opzioni del pannello (ricordate nel browser)
 const salvate = (() => { try { return JSON.parse(localStorage.getItem('annotatore-opzioni')) || {}; } catch { return {}; } })();
-let dimFont = salvate.dimFont || 12, gruppiNascosti = new Set(salvate.gruppiNascosti || []), visibile = null, versioneFiltro = 0;
+let dimFont = salvate.dimFont || 12, visibile = null, versioneFiltro = 0;
+// strutture nascoste, per nome (valgono per tutti i modelli). Le vecchie preferenze per gruppo vengono convertite.
+const nascoste = new Set(salvate.nascoste || GRUPPI.filter(([g]) => (salvate.gruppiNascosti || []).includes(g)).flatMap(([, st]) => st));
+const aperti = new Set();         // gruppi espansi nel pannello
 function salvaOpzioni() {
-  try { localStorage.setItem('annotatore-opzioni', JSON.stringify({ dimFont, gruppiNascosti: [...gruppiNascosti],
-                                                                     maschere: $('mostraMaschere').checked })); } catch {}
+  try { localStorage.setItem('annotatore-opzioni', JSON.stringify({ dimFont, nascoste: [...nascoste],
+                                                                     maschere: $('mostraMaschere').checked,
+                                                                     etichette: $('mostraEtichette').checked })); } catch {}
 }
 function aggiornaVisibili() {
   visibile = new Uint8Array(CLASSI.length).fill(1);
-  for (const [nome, strutture] of GRUPPI) if (gruppiNascosti.has(nome))
-    for (const s of strutture) { const c = CLASSI.indexOf(s); if (c > 0) visibile[c] = 0; }
+  CLASSI.forEach((nome, c) => { if (c > 0 && nascoste.has(nome)) visibile[c] = 0; });
   versioneFiltro++;
+}
+function gruppiPresenti() {      // gruppi con le sole strutture del modello attivo; le strutture non previste finiscono in "Altro"
+  const usate = new Set(), out = [];
+  for (const [nome, st] of GRUPPI) {
+    const p = [...new Set(st.filter(x => CLASSI.includes(x)))]; p.forEach(x => usate.add(x));
+    if (p.length) out.push([nome, p]);
+  }
+  const altro = [...new Set(CLASSI.slice(1).filter(x => !usate.has(x)))];
+  if (altro.length) out.push(['Altro', altro]);
+  return out;
+}
+function interruttore(attr, valore) {
+  const sw = document.createElement('input'); sw.type = 'checkbox'; sw.className = 'switch';
+  sw.setAttribute('role', 'switch'); sw.dataset[attr] = valore; return sw;
 }
 function costruisciOpzioni() {
   const lista = $('listaGruppi'); lista.textContent = '';
-  for (const [nome, strutture] of GRUPPI) {
-    const presenti = strutture.filter(s => CLASSI.includes(s)); if (!presenti.length) continue;
-    const riga = document.createElement('label'); riga.className = 'riga'; riga.title = presenti.join(', ');
+  const tutti = document.createElement('label'); tutti.className = 'riga riga-tutti';
+  tutti.append('Seleziona tutti', interruttore('tutti', '1')); lista.append(tutti);
+  for (const [nome, st] of gruppiPresenti()) {
+    const blocco = document.createElement('div'), riga = document.createElement('div'); riga.className = 'gruppo-riga';
+    let figli = null;
+    if (st.length > 1) {
+      const fr = document.createElement('button'); fr.type = 'button'; fr.className = 'freccia'; fr.textContent = '▶';
+      fr.dataset.apri = nome; fr.setAttribute('aria-expanded', aperti.has(nome)); fr.setAttribute('aria-label', 'Mostra le strutture di ' + nome);
+      riga.append(fr);
+      figli = document.createElement('div'); figli.className = 'figli'; figli.hidden = !aperti.has(nome);
+      for (const x of st) {
+        const r = document.createElement('label'); r.className = 'riga';
+        const t = document.createElement('span'); t.textContent = x;
+        r.append(t, interruttore('struttura', x)); figli.append(r);
+      }
+    } else { const sp = document.createElement('span'); sp.className = 'spazio-freccia'; riga.append(sp); }
+    const lab = document.createElement('label'); lab.className = 'riga'; lab.title = st.join(', ');
     const testo = document.createElement('span'); testo.append(nome + ' ');
-    const n = document.createElement('small'); n.textContent = presenti.length; testo.append(n);
-    const sw = document.createElement('input'); sw.type = 'checkbox'; sw.className = 'switch'; sw.setAttribute('role', 'switch');
-    sw.checked = !gruppiNascosti.has(nome); sw.dataset.gruppo = nome;
-    riga.append(testo, sw); lista.append(riga);
+    const n = document.createElement('small'); n.textContent = st.length; testo.append(n);
+    lab.append(testo, interruttore('gruppo', nome)); riga.append(lab); blocco.append(riga);
+    if (figli) blocco.append(figli);
+    lista.append(blocco);
   }
   $('fontValore').textContent = dimFont;
-  aggiornaVisibili();
+  aggiornaInterruttori(); aggiornaVisibili();
+}
+function aggiornaInterruttori() {        // acceso = tutto visibile, spento = tutto nascosto, a metà = in parte
+  const gp = gruppiPresenti(), stato = elenco => {
+    const n = elenco.filter(x => nascoste.has(x)).length; return { checked: n === 0, indeterminate: n > 0 && n < elenco.length };
+  };
+  for (const sw of $('listaGruppi').querySelectorAll('input.switch')) {
+    const el = sw.dataset.tutti ? gp.flatMap(([, st]) => st) : sw.dataset.gruppo ? (gp.find(([g]) => g === sw.dataset.gruppo) || [, []])[1] : [sw.dataset.struttura];
+    Object.assign(sw, stato(el));
+  }
 }
 function mostraOpzioni(si) { $('opzioni').hidden = !si; $('ingranaggio').setAttribute('aria-expanded', si); }
 const aspetta = ms => new Promise(r => (pipWin || window).setTimeout(r, ms));   // i timer della finestra visibile non vengono rallentati
@@ -235,7 +284,7 @@ function aggiornaScelta() {
     const b = document.createElement('button'); b.type = 'button'; b.dataset.modello = m.id;
     b.setAttribute('aria-pressed', modelloAttivo && modelloAttivo.id === m.id ? 'true' : 'false');
     b.disabled = caricandoModello;
-    const d = document.createElement('small'); d.textContent = m.descr + (m === MODELLI[0] ? ', più recente' : '');
+    const d = document.createElement('small'); d.textContent = m.descr;
     b.append(m.nome, d); box.append(b);
   }
 }
@@ -639,7 +688,7 @@ async function apriPiP() {
   if (pipWin) { pipWin.focus(); return; }
   pipWin = await documentPictureInPicture.requestWindow({ width: 560, height: 640 });
   const st = pipWin.document.createElement('style'); st.textContent = $('stili').textContent;
-  pipWin.document.head.append(st); pipWin.document.title = 'Annotatore RM';
+  pipWin.document.head.append(st); pipWin.document.title = 'Atlante RM live';
   pipWin.document.body.className = 'in-pip';
   pipWin.document.body.append(vista);
   video.play().catch(() => {});
@@ -659,16 +708,27 @@ $('pausa').onclick = () => { inPausa = !inPausa; $('pausa').textContent = inPaus
 for (const id of ['mostraMaschere', 'mostraEtichette', 'opacita', 'soglia']) $(id).addEventListener('input', disegna);
 window.addEventListener('resize', () => { if (!pipWin) disegna(); });
 $('mostraMaschere').checked = salvate.maschere !== false;
+$('mostraEtichette').checked = salvate.etichette !== false;
 $('ingranaggio').onclick = () => mostraOpzioni($('opzioni').hidden);
 vista.addEventListener('keydown', ev => { if (ev.key === 'Escape') mostraOpzioni(false); });
 $('mostraMaschere').addEventListener('change', salvaOpzioni);
+$('mostraEtichette').addEventListener('change', salvaOpzioni);
 const cambiaFont = d => { dimFont = Math.min(24, Math.max(9, dimFont + d)); $('fontValore').textContent = dimFont; salvaOpzioni(); disegna(); };
 $('fontMeno').onclick = () => cambiaFont(-1);
 $('fontPiu').onclick = () => cambiaFont(1);
 $('listaGruppi').addEventListener('change', ev => {
-  const g = ev.target.dataset.gruppo; if (!g) return;
-  if (ev.target.checked) gruppiNascosti.delete(g); else gruppiNascosti.add(g);
-  aggiornaVisibili(); salvaOpzioni(); disegna();
+  const sw = ev.target, gp = gruppiPresenti();
+  const el = sw.dataset.tutti ? gp.flatMap(([, st]) => st) : sw.dataset.gruppo ? (gp.find(([g]) => g === sw.dataset.gruppo) || [, []])[1]
+           : sw.dataset.struttura ? [sw.dataset.struttura] : null;
+  if (!el) return;
+  for (const x of el) if (sw.checked) nascoste.delete(x); else nascoste.add(x);
+  aggiornaInterruttori(); aggiornaVisibili(); salvaOpzioni(); disegna();
+});
+$('listaGruppi').addEventListener('click', ev => {
+  const fr = ev.target.closest('button.freccia'); if (!fr) return;
+  const g = fr.dataset.apri, apri = !aperti.has(g);
+  if (apri) aperti.add(g); else aperti.delete(g);
+  fr.setAttribute('aria-expanded', apri); fr.closest('.gruppo-riga').nextElementSibling.hidden = !apri;
 });
 $('sceltaModello').addEventListener('click', ev => {
   const b = ev.target.closest('button[data-modello]'); if (b) usaModello(b.dataset.modello);
