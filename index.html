@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atlante RM live</title>
+<link rel="icon" type="image/png" href="icona.png">
 <script src="coi-serviceworker.min.js"></script>
 <script src="ort/ort.wasm.min.js"></script>
 <style id="stili">
@@ -16,6 +17,10 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--fondo); color: var(--testo); font: 15px/1.45 var(--corpo); }
   main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 40px; }
+  .testata { display: flex; align-items: center; gap: 12px; margin: 0 0 4px; }
+  .testata img { width: 56px; height: 56px; flex: none; }
+  @font-face { font-family: "Orbitron"; font-weight: 600; font-display: swap; src: url("orbitron-600.woff2") format("woff2"); }
+  .testata h1 { margin: 0; font: 600 1.7rem/1.1 "Orbitron", var(--num); letter-spacing: .03em; }
   h1 { font: 600 1.7rem/1.1 var(--num); margin: 0 0 4px; letter-spacing: .01em; }
   .sotto { color: var(--tenue); margin: 0 0 18px; font-size: .9rem; }
   .passi { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
@@ -92,7 +97,7 @@
 </head>
 <body>
 <main>
-  <h1>Atlante RM live</h1>
+  <div class="testata"><img src="logo.png" alt=""><h1>Atlante RM live</h1></div>
   <p class="aiuto">
     <b>1.</b> Apri una nuova pagina, clicca <b>Avvia cattura</b> e scegli la scheda del PACS &nbsp; <b>2.</b> Trascina un rettangolo sull'immagine &nbsp; <b>3.</b> Apri la <b>finestra fluttuante</b></p>
 
